@@ -1,16 +1,20 @@
 import mongoose from "mongoose";
 import { mongodb_url } from "../scret.js";
 import colors from "colors";
+import { logger } from "../controllers/loggerController.js";
 
 export const connectDatabase = async (options = {}) => {
   try {
     await mongoose.connect(mongodb_url, options);
-    console.log("Cunnection to DB is successfull established".bgMagenta.green);
+    logger.log(
+      "info",
+      "Cunnection to DB is successfull established".bgMagenta.green
+    );
 
     mongoose.connection.on("error", (error) => {
-      console.error("DB cunnection error", error);
+      logger.log("error", "DB cunnection error", error);
     });
   } catch (error) {
-    console.error("Could not cunnect to DB", error.toString());
+    logger.log("error", "Could not cunnect to DB", error.toString());
   }
 };

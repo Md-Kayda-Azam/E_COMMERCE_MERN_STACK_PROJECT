@@ -1,7 +1,7 @@
 import { validationResult } from "express-validator";
 import { errorRespone } from "../helper/respone.js ";
 
-export const runValidation = async (req, res, next) => {
+export const runValidators = async (req, res, next) => {
   try {
     const errors = validationResult(req);
 

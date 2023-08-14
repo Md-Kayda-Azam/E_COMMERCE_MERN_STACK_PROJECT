@@ -1,6 +1,5 @@
 import mongoose, { Schema } from "mongoose";
 import bcrypt from "bcryptjs";
-import { default_image_path } from "../scret.js";
 
 const userSchema = new Schema(
   {
@@ -10,7 +9,7 @@ const userSchema = new Schema(
       trim: true,
       minlength: [
         3,
-        "The length name of User name can be minimum 31 character ",
+        "The length name of User name can be minimum 3 character ",
       ],
       maxlength: [
         31,
@@ -35,13 +34,14 @@ const userSchema = new Schema(
       required: [true, "User password is missing"],
       minlength: [
         6,
-        "The length name of User name can be minimum 31 character ",
+        "The length name of User name can be minimum 3 character ",
       ],
       set: (v) => bcrypt.hashSync(v, bcrypt.genSaltSync(10)),
     },
     image: {
-      type: String,
-      default: default_image_path,
+      type: Buffer,
+      contentType: String,
+      required: [true, "User image is required"],
     },
     address: {
       type: String,
@@ -64,7 +64,7 @@ const userSchema = new Schema(
       default: false,
     },
   },
-  { timestramps: true }
+  { timestamps: true }
 );
 
 export default mongoose.model("User", userSchema);

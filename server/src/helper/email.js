@@ -21,9 +21,9 @@ export const emailWithNodeMailer = async (emailData) => {
     };
 
     const info = await transporter.sendMail(mailOption);
-    console.log("Message sent:", info.response);
+    logger.log("info", "Message sent:", info.response);
   } catch (error) {
-    console.error("Error occurred while sending email:", error);
+    logger.log("error", "Error occurred while sending email:", error);
     throw error;
   }
 };

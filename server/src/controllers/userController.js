@@ -1,12 +1,15 @@
 import createError from "http-errors";
 import User from "../models/modelUser.js";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { successRespone } from "../helper/respone.js";
 import { findWithId } from "../services/findItem.js";
-import { deleteImage } from "../helper/deleteImage.js";
 import { createJSONWebToken } from "../helper/jsonwebtoken.js";
-import { cleint_url, jwtActivationKey } from "../scret.js";
+import { cleint_url, jwtActivationKey, jwtResetPasswordKey } from "../scret.js";
 import { emailWithNodeMailer } from "../helper/email.js";
+import { runValidators } from "../validators/index.js";
+import { checkUserExist } from "../helper/checkUserExist.js";
+import { sendEmail } from "../helper/sendEmail.js";
 
 /**
  * GET Users
@@ -15,7 +18,7 @@ import { emailWithNodeMailer } from "../helper/email.js";
  * @param {*} next
  * @returns
  */
-export const getUsers = async (req, res, next) => {
+export const handleGetUsers = async (req, res, next) => {
   try {
     const search = req.query.search || "";
     const page = Number(req.query.page) || 1;
@@ -57,6 +60,7 @@ export const getUsers = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+    console.log(error);
   }
 };
 
@@ -67,7 +71,7 @@ export const getUsers = async (req, res, next) => {
  * @param {*} next
  * @returns
  */
-export const getUserById = async (req, res, next) => {
+export const handleGetUserById = async (req, res, next) => {
   try {
     const id = req.params.id;
     const options = { password: 0 };
@@ -89,16 +93,12 @@ export const getUserById = async (req, res, next) => {
  * @param {*} next
  * @returns
  */
-export const deleteUserById = async (req, res, next) => {
+export const handleDeleteUserById = async (req, res, next) => {
   try {
     const id = req.params.id;
     const options = { password: 0 };
 
-    const user = await findWithId(User, id, options);
-
-    const userImagePath = user.image;
-
-    deleteImage(userImagePath);
+    await findWithId(User, id, options);
 
     await User.findByIdAndDelete({ _id: id, isAdmin: false });
 
@@ -117,11 +117,21 @@ export const deleteUserById = async (req, res, next) => {
  * @param {*} next
  * @returns
  */
-export const proseccRegister = async (req, res, next) => {
+export const handleProseccRegister = async (req, res, next) => {
   try {
     const { name, email, password, phone, address } = req.body;
 
-    const userExsits = await User.exists({ email: email });
+    let image = req.file;
+    if (!image) {
+      throw createError(400, "Image file is required");
+    }
+    if (image > 1024 * 1024 * 2) {
+      throw createError(400, "File too large, It must be less than 2 mb");
+    }
+
+    const imageBufferString = req.file.buffer.toString("base64");
+
+    const userExsits = await checkUserExist(email);
 
     if (userExsits) {
       throw createError(
@@ -132,7 +142,7 @@ export const proseccRegister = async (req, res, next) => {
 
     // create jwt
     const token = createJSONWebToken(
-      { name, email, password, phone, address },
+      { name, email, password, phone, address, image: imageBufferString },
       jwtActivationKey,
       "10m"
     );
@@ -149,17 +159,11 @@ export const proseccRegister = async (req, res, next) => {
     };
 
     // send email with nodemailer
-    try {
-      await emailWithNodeMailer(emailData);
-    } catch (error) {
-      next(createError("Faild to send verification email"));
-      return;
-    }
+    sendEmail(emailData);
 
     return successRespone(res, {
       statusCode: 200,
       message: `Please got to your ${email} for completing your registration process`,
-      payload: { token },
     });
   } catch (error) {
     next(error);
@@ -172,7 +176,7 @@ export const proseccRegister = async (req, res, next) => {
  * @param {*} next
  * @returns
  */
-export const activateUserAccount = async (req, res, next) => {
+export const handleActivateUserAccount = async (req, res, next) => {
   try {
     const token = req.body.token;
 
@@ -206,6 +210,246 @@ export const activateUserAccount = async (req, res, next) => {
         throw error;
       }
     }
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * User update
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleUpdateUserById = async (req, res, next) => {
+  try {
+    const userId = req.params.id;
+    const options = { password: 0 };
+    await findWithId(User, userId, options);
+    const updateOptions = { new: true, runValidators, context: "query" };
+
+    let updates = {};
+    // name, email, password, phone, image, address
+    const allowedFeilds = ["name", "email", "password", "phone", "address"];
+    for (const key in req.body) {
+      if (allowedFeilds.includes(key)) {
+        updates[key] = req.body[key];
+      }
+      if (key === "email") {
+        throw createError(400, "Email can not be allowed!");
+      }
+    }
+
+    let image = req.file;
+    if (image) {
+      // image size maximum 2 mb
+      if (image.size > 1024 * 1024 * 2) {
+        throw createError(400, "File too large, It must be less than 2 mb");
+      }
+      updates.image = image.buffer.toString("base64");
+    }
+
+    const updateUser = await User.findByIdAndUpdate(
+      userId,
+      updates,
+      updateOptions
+    ).select("_password");
+
+    if (!updateUser) {
+      throw createError(404, "User this ID dose not axist!");
+    }
+
+    return successRespone(res, {
+      statusCode: 200,
+      message: "User was updated successfully",
+      payload: updateUser,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * handle Ban User By Id
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleBanUserById = async (req, res, next) => {
+  try {
+    const userId = req.params.id;
+    await findWithId(User, userId);
+    const update = { isBanned: true };
+    const updateOptions = { new: true, runValidators, context: "query" };
+
+    const updateUser = await User.findByIdAndUpdate(
+      userId,
+      update,
+      updateOptions
+    ).select("_password");
+
+    if (!updateUser) {
+      throw createError(404, "User was not banned successfully!");
+    }
+
+    return successRespone(res, {
+      statusCode: 200,
+      message: "User was banned successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * handle unBan User By Id
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleUnbanUserById = async (req, res, next) => {
+  try {
+    const userId = req.params.id;
+    await findWithId(User, userId);
+    const update = { isBanned: false };
+    const updateOptions = { new: true, runValidators, context: "query" };
+
+    const updateUser = await User.findByIdAndUpdate(
+      userId,
+      update,
+      updateOptions
+    ).select("_password");
+
+    if (!updateUser) {
+      throw createError(404, "User was not unbanned successfully!");
+    }
+
+    return successRespone(res, {
+      statusCode: 200,
+      message: "User was unbanned successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * update password
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleUpdatePassword = async (req, res, next) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    const userId = req.params.id;
+    const user = await findWithId(User, userId);
+
+    // Compare the password
+    const isPasswordMatch = await bcrypt.compare(oldPassword, user.password);
+
+    if (!isPasswordMatch) {
+      throw new Error("Old Password is incurrect");
+    }
+    // const update = { $set: { password: newPassword } };
+    // const updateOptions = { new: true };
+
+    const updateUser = await User.findByIdAndUpdate(
+      userId,
+      { password: newPassword },
+      { new: true }
+    ).select("_password");
+
+    if (!updateUser) {
+      throw createError(404, "User was not password update successfully!");
+    }
+
+    return successRespone(res, {
+      statusCode: 200,
+      message: "User was password updated successfully",
+      payload: { updateUser },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * update password
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleUpdateForgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    // const userId = req.params.id;
+    const user = await User.findOne({ email: email });
+
+    if (!user) {
+      throw new Error(
+        "Email is incurrect or you have not verified your email address. Please register yourseft first"
+      );
+    }
+    // create jwt
+    const token = createJSONWebToken({ email }, jwtResetPasswordKey, "10m");
+    // prepare email
+
+    const emailData = {
+      email,
+      subject: "Reset password email",
+      html: `
+      <h2> Hello ${user.name} !</h2>
+      <p>Please click here to <a href="${cleint_url}/api/users/reset-password/${token}" target="_blank">reset your password</a></p>
+      `,
+    };
+
+    // send email with nodemailer
+    sendEmail(emailData);
+
+    return successRespone(res, {
+      statusCode: 200,
+      message: `Please got to your ${email} to reset the password`,
+      payload: { token },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * update password
+ * @param {*} req
+ * @param {*} res
+ * @param {*} next
+ * @returns
+ */
+export const handleUpdateResetPassword = async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+
+    const decoded = jwt.verify(token, jwtResetPasswordKey);
+
+    if (!decoded) {
+      throw createError(400, "Invalid or expried token");
+    }
+    const filter = { email: decoded.email };
+    const update = { password: password };
+    const options = { new: true };
+    const updateUser = await User.findOneAndUpdate(
+      filter,
+      update,
+      options
+    ).select("_password");
+
+    if (!updateUser) {
+      throw createError(404, "User was not password update successfully!");
+    }
+    return successRespone(res, {
+      statusCode: 200,
+      message: `Password reset successfully`,
+    });
   } catch (error) {
     next(error);
   }
